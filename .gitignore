@@ -23,3 +23,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Credentials (never commit; copy credentials.example.h → credentials.h)
+robot/src/credentials.h
