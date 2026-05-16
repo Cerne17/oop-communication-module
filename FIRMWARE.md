@@ -48,7 +48,7 @@ depends on the chip on your specific board.
 
 **macOS**: drivers may already be included. Check with:
 ```bash
-ls /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* 2>/dev/null
+find /dev -maxdepth 1 \( -name "cu.usbserial*" -o -name "cu.SLAB_USBtoUART*" \) 2>/dev/null
 ```
 
 **Linux**: add your user to the `dialout` group, then log out and back in:
@@ -66,9 +66,9 @@ ls /dev/ttyUSB* /dev/ttyACM*
 
 ### 2.1 Board
 
-Any generic **ESP32 development board** (`esp32dev` in PlatformIO). The
-firmware uses Bluetooth Classic SPP, which requires a dual-mode ESP32 —
-**ESP32-S2 and ESP32-C3 do not support Bluetooth Classic** and will not work.
+Any generic **ESP32 development board** (`esp32dev` in PlatformIO). The robot
+firmware communicates over **WiFi (UDP)**, so any ESP32 variant with WiFi works —
+including ESP32-S2 and ESP32-C3.
 
 ### 2.2 Wiring
 
@@ -215,11 +215,17 @@ pio device monitor --baud 115200
 Expected boot output:
 ```
 === Robot ESP32 booting ===
+[ROBOT] Connecting to WiFi.....
+[ROBOT] WiFi IP: 192.168.1.42
+[ROBOT] UDP listening on port 5005
 === Ready ===
 ```
 
 If you see garbage characters, the baud rate is wrong. The firmware always
 uses 115200 (`robot/platformio.ini:monitor_speed`).
+
+If WiFi never connects (dots printed indefinitely), check that
+`robot/src/credentials.h` has the correct SSID and password.
 
 ### 4.4 Build only (no upload)
 
@@ -296,11 +302,25 @@ cable is loose or reversed. Reseat it and retry.
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `BT_NAME` | `"RobotESP32"` | Bluetooth device name — must match the port the computer pairs to |
+| `UDP_PORT` | `5005` | UDP port the ESP32 listens on |
 | `LEFT_WHEEL.pwm` | `14` | PWM pin for left motor speed |
 | `LEFT_WHEEL.dir` | `12` | Direction pin for left motor |
 | `RIGHT_WHEEL.pwm` | `15` | PWM pin for right motor speed |
 | `RIGHT_WHEEL.dir` | `2` | Direction pin for right motor |
+
+### Robot WiFi credentials (`robot/src/credentials.h`)
+
+`credentials.h` is gitignored and must be created locally before flashing:
+
+```bash
+cp robot/src/credentials.example.h robot/src/credentials.h
+# then edit credentials.h with your SSID and password
+```
+
+```cpp
+#define WIFI_SSID "your-network-name"
+#define WIFI_PASS "your-network-password"
+```
 
 ### CAM (`cam/src/main.cpp`)
 
@@ -322,41 +342,60 @@ may saturate the Bluetooth link at 6 FPS. Reduce `TARGET_FPS` or increase
 
 ---
 
-## 7. Bluetooth pairing
+## 7. WiFi setup (Robot ESP32)
 
-After the firmware is running and the serial monitor shows `=== Ready ===`:
+The robot communicates over UDP — no Bluetooth pairing needed. The CAM board
+still uses Bluetooth (see §7.2 below).
 
-**macOS**
-1. System Settings → Bluetooth → wait for `RobotESP32` / `RobotCAM` to appear.
-2. Click Connect.
-3. The device appears as `/dev/cu.RobotESP32-SerialPort` (and similarly for CAM).
+### 7.1 Prepare credentials
 
-**Linux**
 ```bash
-bluetoothctl
-> scan on
-> # wait for the MAC address to appear, then:
-> pair   AA:BB:CC:DD:EE:FF
-> trust  AA:BB:CC:DD:EE:FF
-> quit
-
-# Bind to a serial port (run once per session, or add to /etc/rc.local)
-sudo rfcomm bind 0 AA:BB:CC:DD:EE:FF   # robot  → /dev/rfcomm0
-sudo rfcomm bind 1 AA:BB:CC:DD:EE:FF   # cam    → /dev/rfcomm1
+cp robot/src/credentials.example.h robot/src/credentials.h
 ```
 
-After pairing, update the port strings in `computer/main.py` `PHASE_CONFIGS`:
+Edit `robot/src/credentials.h`:
+```cpp
+#define WIFI_SSID "your-network-name"
+#define WIFI_PASS "your-network-password"
+```
+
+Flash the firmware (`pio run --target upload`). The serial monitor shows the
+assigned IP on boot:
+```
+[ROBOT] WiFi IP: 192.168.1.42
+[ROBOT] UDP listening on port 5005
+```
+
+Update `PHASE_CONFIGS[2]` and `PHASE_CONFIGS[3]` in `computer/main.py` with
+the robot's IP:
 ```python
 2: PhaseConfig(
-    robot_port = "/dev/cu.RobotESP32-SerialPort",   # macOS
-    # robot_port = "/dev/rfcomm0",                  # Linux
+    robot_port      = "192.168.1.42:5005",
+    robot_transport = "udp",
     ...
 ),
-3: PhaseConfig(
-    robot_port = "/dev/cu.RobotESP32-SerialPort",
-    cam_port   = "/dev/cu.RobotCAM-SerialPort",
-    ...
-),
+```
+
+### 7.2 WiFi setup (CAM)
+
+Same pattern as the robot — credentials file, flash, read the IP:
+
+```bash
+cp cam/src/credentials.example.h cam/src/credentials.h
+# edit with SSID/PASS, then flash
+cd cam && pio run --target upload
+```
+
+Serial monitor prints the IP on boot:
+```
+[CAM] WiFi IP: 192.168.1.43
+[CAM] UDP listening on port 5006
+```
+
+Update `PHASE_CONFIGS[3].cam_port` in `computer/main.py`:
+```python
+cam_port      = "192.168.1.43:5006",
+cam_transport = "udp",
 ```
 
 ---
@@ -369,6 +408,9 @@ After pairing, update the port strings in `computer/main.py` `PHASE_CONFIGS`:
 | `Permission denied: /dev/ttyUSB0` | User not in `dialout` group | `sudo usermod -a -G dialout $USER` then log out |
 | Serial monitor shows garbage | Wrong baud rate | Firmware always uses 115200 |
 | `[CAM] FATAL: camera init failed` | Camera ribbon cable loose | Reseat the ribbon; check orientation |
-| Board not detected after pairing (macOS) | SPP profile not active | Ensure ESP32 is running firmware (shows `=== Ready ===`) before pairing |
+| Robot WiFi never connects (dots print forever) | Wrong credentials | Check `robot/src/credentials.h` SSID/PASS |
+| Robot WiFi connects but computer can't reach it | Firewall or different subnet | Ensure computer and robot are on same WiFi network; check UDP port 5005 |
+| CAM WiFi never connects | Wrong credentials | Check `cam/src/credentials.h` SSID/PASS |
+| CAM WiFi connects but computer can't reach it | Firewall or different subnet | Ensure computer and CAM are on same WiFi network; check UDP port 5006 |
 | `esptool.py: command not found` | PlatformIO not installed | `pip install platformio` |
 | Upload succeeds but device is unresponsive | GPIO0 still tied to GND | Remove GPIO0–GND jumper and press RST |

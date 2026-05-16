@@ -11,7 +11,7 @@ End-to-end autonomous cargo-carrying robot with computer vision. Three hardware 
 - **Host computer** (`computer/`) — vision pipeline + control logic (Python ≥3.11)
 - **Emulator** (`emulator/`) — TCP-based software simulation for Phase 1 (no hardware needed)
 
-Three development phases: Phase 1 = manual control via TCP emulator, Phase 2 = manual control over physical BT, Phase 3 = autonomous vision-guided control.
+Three development phases: Phase 1 = manual control via TCP emulator, Phase 2 = manual control over physical robot via UDP/WiFi, Phase 3 = autonomous vision-guided control.
 
 ## Commands
 
@@ -25,8 +25,8 @@ pip install -e .
 ### Running (all phases)
 ```bash
 bash scripts/run.sh 1   # Phase 1: manual + TCP emulator
-bash scripts/run.sh 2   # Phase 2: manual + physical robot BT
-bash scripts/run.sh 3   # Phase 3: autonomous + physical robot + CAM BT
+bash scripts/run.sh 2   # Phase 2: manual + physical robot UDP/WiFi
+bash scripts/run.sh 3   # Phase 3: autonomous + physical robot + CAM UDP/WiFi
 ```
 
 ### Firmware (PlatformIO)
@@ -41,9 +41,9 @@ There is no automated test suite — testing is done via the emulator (Phase 1) 
 
 ### Data Flow (Phase 3)
 ```
-ESP32-CAM → [Link A: BT/Serial] → CamReceiver → ImageAssembler → VisionProcessor
-                                                                        ↓
-ESP32 Robot ← [Link B: BT/Serial] ← RobotSender ← BlobFollowerStrategy ←
+ESP32-CAM → [Link A: UDP/WiFi] → CamReceiver → ImageAssembler → VisionProcessor
+                                                                       ↓
+ESP32 Robot ← [Link B: UDP/WiFi] ← RobotSender ← BlobFollowerStrategy ←
 ```
 
 **Link A** carries IMAGE_CHUNK frames (CAM → Computer). **Link B** carries CONTROL_REF frames (Computer → Robot).
@@ -98,9 +98,11 @@ Project skills live in `.claude/skills/` and are auto-discovered by Claude Code.
 - `/add-message-type` — adding a new wire message on one link only
 - `/debug-computer-comm` — frames not arriving, CRC errors, heartbeat timeouts
 - `/implement-transport` — adding a new link type (WebSocket, UDP, …)
+- `/use-udp-transport` — both links use UDP/WiFi; reference for computer config and ESP32 firmware
+- `/debug-udp` — UDP-specific issues: no datagrams, CRC errors, watchdog over WiFi
 - `/implement-detector` — writing a new `Detector` subclass
 - `/implement-strategy` — writing a new `ControlStrategy`
-- `/debug-robot-comm` — BT pairing failures, watchdog triggers, wrong wheel behaviour
+- `/debug-robot-comm` — WiFi connection issues, watchdog triggers, wrong wheel behaviour
 - `/add-motion-mode` — adding a new drive mode
 - `/debug-cam-comm` — camera init failure, frames not streaming
 - `/debug-emulator` — TCP connection issues, threads dying, wrong wheel output
@@ -108,5 +110,4 @@ Project skills live in `.claude/skills/` and are auto-discovered by Claude Code.
 - `/debug-upload` — `Failed to connect to ESP32`, bootloader mode
 - `/debug-serial` — garbage output, wrong baud rate, permission errors
 - `/debug-cam-init` — `camera init failed`, ribbon cable, streaming issues
-- `/debug-bluetooth` — BT device not found, `rfcomm bind`, wrong BT name
-- `/configure-firmware` — changing motor pins, BT names, frame rate, JPEG quality
+- `/configure-firmware` — changing motor pins, UDP port, frame rate, JPEG quality

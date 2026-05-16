@@ -3,6 +3,8 @@ computer.communication.transport — concrete Transport implementations.
 
 SerialTransport  : pyserial — works on macOS after pairing via System Settings
 RFCOMMTransport  : Linux AF_BLUETOOTH RFCOMM socket — no system pairing needed
+TCPTransport     : TCP client — emulator (loopback) or any TCP-reachable device
+UDPTransport     : UDP datagram — one frame per datagram; requires WiFi on ESP32
 """
 
 from __future__ import annotations
@@ -122,26 +124,41 @@ class RFCOMMTransport(Transport):
 class TCPTransport(Transport):
     """
     TCP client transport. Connects to a server at (host, port).
-    Intended for Phase 1 testing where the robot emulator acts as the TCP server.
+
+    Works for any TCP-reachable target: the Phase 1 emulator (loopback) or
+    a physical ESP32 running a WiFiServer sketch.  Pass connect_timeout > 0
+    when connecting over WiFi; keepalive is always enabled to detect dropped
+    links within ~15 s without relying solely on the application heartbeat.
     """
 
-    def __init__(self, host: str, port: int) -> None:
-        self._host    = host
-        self._port    = port
+    def __init__(self, host: str, port: int, connect_timeout: float = 5.0) -> None:
+        self._host            = host
+        self._port            = port
+        self._connect_timeout = connect_timeout
         self._sock: Optional[socket.socket] = None
-        self._tx_lock = threading.Lock()
+        self._tx_lock         = threading.Lock()
 
     def connect(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self._connect_timeout)
         try:
             sock.connect((self._host, self._port))
-            sock.setblocking(False)
-            self._sock = sock
         except OSError as exc:
             sock.close()
             raise ConnectionError(
                 f"TCPTransport: cannot connect to {self._host}:{self._port}: {exc}"
             ) from exc
+
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE,  5)
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT,   3)
+
+        sock.setblocking(False)
+        self._sock = sock
 
     def disconnect(self) -> None:
         if self._sock:
@@ -169,6 +186,70 @@ class TCPTransport(Transport):
             return b''
         except OSError as exc:
             raise ConnectionError(f"TCPTransport recv error: {exc}") from exc
+
+    def is_connected(self) -> bool:
+        return self._sock is not None
+
+
+class UDPTransport(Transport):
+    """
+    UDP datagram transport. Each send() call is one datagram to (host, port).
+    receive_available() drains one datagram per call (non-blocking).
+
+    Requires the ESP32 to run a WiFi+UDP server on the same port.
+    Heartbeats remain necessary: UDP has no keepalive, and the firmware
+    watchdog fires emergencyStop() after WATCHDOG_TIMEOUT_MS of silence.
+
+    local_port=0 lets the OS assign an ephemeral port for incoming datagrams
+    (ACK, HEARTBEAT). Set it explicitly if the ESP32 sends back to a fixed port.
+    """
+
+    def __init__(self, host: str, port: int, local_port: int = 0) -> None:
+        self._host       = host
+        self._port       = port
+        self._local_port = local_port
+        self._sock: Optional[socket.socket] = None
+        self._tx_lock    = threading.Lock()
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("", self._local_port))
+        except OSError as exc:
+            sock.close()
+            raise ConnectionError(
+                f"UDPTransport: bind on port {self._local_port} failed: {exc}"
+            ) from exc
+        sock.setblocking(False)
+        self._sock = sock
+
+    def disconnect(self) -> None:
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
+    def send(self, data: bytes) -> None:
+        with self._tx_lock:
+            if not self._sock:
+                raise ConnectionError("UDPTransport: not connected")
+            try:
+                self._sock.sendto(data, (self._host, self._port))
+            except OSError as exc:
+                raise ConnectionError(f"UDPTransport send error: {exc}") from exc
+
+    def receive_available(self, max_bytes: int = 4096) -> bytes:
+        if not self._sock:
+            return b''
+        try:
+            data, _ = self._sock.recvfrom(max_bytes)
+            return data
+        except BlockingIOError:
+            return b''
+        except OSError as exc:
+            raise ConnectionError(f"UDPTransport recv error: {exc}") from exc
 
     def is_connected(self) -> bool:
         return self._sock is not None

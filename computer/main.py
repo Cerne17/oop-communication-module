@@ -2,9 +2,9 @@
 computer.main -- unified entry point for all development phases.
 
 Usage:
-    python -m computer.main --phase 1   # manual control, socat virtual ports
-    python -m computer.main --phase 2   # manual control, physical robot over BT
-    python -m computer.main --phase 3   # autonomous vision, physical robot + CAM over BT
+    python -m computer.main --phase 1   # manual control, TCP to emulator
+    python -m computer.main --phase 2   # manual control, physical robot over UDP/WiFi
+    python -m computer.main --phase 3   # autonomous vision, physical robot + CAM over UDP/WiFi
 
 Or after `pip install -e .`:
     robot-vision --phase <1|2|3>
@@ -40,8 +40,8 @@ class PhaseConfig:
 
 
 # Phase 1 -- manual, TCP loopback to robot emulator
-# Phase 2 -- manual, physical robot over BT
-# Phase 3 -- autonomous vision, physical robot + CAM over BT
+# Phase 2 -- manual, physical robot over UDP/WiFi (ESP32 IP:port)
+# Phase 3 -- autonomous vision, physical robot over UDP/WiFi + CAM over BT
 PHASE_CONFIGS: dict[int, PhaseConfig] = {
     1: PhaseConfig(
         robot_port      = "localhost:5001",
@@ -49,15 +49,15 @@ PHASE_CONFIGS: dict[int, PhaseConfig] = {
         cam_port        = None,
     ),
     2: PhaseConfig(
-        robot_port = "/dev/cu.RobotESP32-SerialPort",  # macOS BT serial
-        # robot_port = "/dev/rfcomm0",                 # Linux RFCOMM
-        cam_port   = None,
+        robot_port      = "192.168.1.42:5005",  # ESP32 WiFi IP + listen port
+        robot_transport = "udp",
+        cam_port        = None,
     ),
     3: PhaseConfig(
-        robot_port = "/dev/cu.RobotESP32-SerialPort",
-        cam_port   = "/dev/cu.RobotCAM-SerialPort",
-        # robot_port = "/dev/rfcomm0",                 # Linux RFCOMM
-        # cam_port   = "/dev/rfcomm1",
+        robot_port      = "192.168.1.42:5005",  # robot ESP32 WiFi IP + listen port
+        robot_transport = "udp",
+        cam_port        = "192.168.1.43:5006",  # CAM ESP32 WiFi IP + listen port
+        cam_transport   = "udp",
     ),
 }
 
@@ -67,7 +67,7 @@ PHASE_CONFIGS: dict[int, PhaseConfig] = {
 # --------------------------------------------------------------------------- #
 
 def _make_transport(kind: str, port: str):
-    from computer.communication.transport import SerialTransport, RFCOMMTransport, TCPTransport
+    from computer.communication.transport import SerialTransport, RFCOMMTransport, TCPTransport, UDPTransport
     if kind == "serial":
         return SerialTransport(port)
     if kind == "rfcomm":
@@ -75,6 +75,9 @@ def _make_transport(kind: str, port: str):
     if kind == "tcp":
         host, port_str = port.rsplit(":", 1)
         return TCPTransport(host, int(port_str))
+    if kind == "udp":
+        host, port_str = port.rsplit(":", 1)
+        return UDPTransport(host, int(port_str))
     raise ValueError(f"Unknown transport kind: {kind!r}")
 
 
@@ -178,9 +181,9 @@ def _run_autonomous(cfg: PhaseConfig) -> None:
 
 def _phase_label(phase: int) -> str:
     return {
-        1: "manual / socat virtual ports",
-        2: "manual / physical robot BT",
-        3: "autonomous / physical robot + CAM BT",
+        1: "manual / TCP emulator",
+        2: "manual / physical robot UDP+WiFi",
+        3: "autonomous / physical robot + CAM over UDP+WiFi",
     }[phase]
 
 
@@ -193,9 +196,9 @@ def main() -> None:
         "--phase", type=int, choices=[1, 2, 3], required=True,
         metavar="PHASE",
         help=(
-            "1 = manual / socat virtual ports  |  "
-            "2 = manual / physical robot BT  |  "
-            "3 = autonomous / physical robot + CAM BT"
+            "1 = manual / TCP emulator  |  "
+            "2 = manual / physical robot UDP+WiFi  |  "
+            "3 = autonomous / physical robot + CAM over UDP+WiFi"
         ),
     )
     args = parser.parse_args()
